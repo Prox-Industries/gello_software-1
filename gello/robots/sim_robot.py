@@ -121,13 +121,17 @@ class ZMQRobotServer:
 
                 self._socket.send(pickle.dumps(result))
             except zmq.error.Again:
-                print("Timeout in ZMQLeaderServer serve")
-                # Timeout occurred, check if the stop event is set
+                # Timeout occurred - keep polling until stop is requested.
+                pass
+            except zmq.error.ZMQError:
+                if self._stop_event.is_set():
+                    break
+                raise
+        self._socket.close(linger=0)
+        self._context.term()
 
     def stop(self) -> None:
         self._stop_event.set()
-        self._socket.close()
-        self._context.term()
 
 
 class MujocoRobotServer:
@@ -138,6 +142,7 @@ class MujocoRobotServer:
         host: str = "127.0.0.1",
         port: int = 5556,
         print_joints: bool = False,
+        headless: bool = False,
     ):
         self._has_gripper = gripper_xml_path is not None
         arena = build_scene(xml_path, gripper_xml_path)
@@ -165,6 +170,8 @@ class MujocoRobotServer:
         self._zmq_server_thread = ZMQServerThread(self._zmq_server)
 
         self._print_joints = print_joints
+        self._headless = headless
+        self._stop_event = threading.Event()
 
     def num_dofs(self) -> int:
         return self._num_joints
@@ -218,8 +225,26 @@ class MujocoRobotServer:
     def serve(self) -> None:
         # start the zmq server
         self._zmq_server_thread.start()
+        if self._headless:
+            while not self._stop_event.is_set():
+                step_start = time.time()
+
+                self._data.ctrl[:] = self._joint_cmd
+                mujoco.mj_step(self._model, self._data)
+                self._joint_state = self._data.qpos.copy()[: self._num_joints]
+
+                if self._print_joints:
+                    print(self._joint_state)
+
+                time_until_next_step = self._model.opt.timestep - (
+                    time.time() - step_start
+                )
+                if time_until_next_step > 0:
+                    time.sleep(time_until_next_step)
+            return
+
         with mujoco.viewer.launch_passive(self._model, self._data) as viewer:
-            while viewer.is_running():
+            while viewer.is_running() and not self._stop_event.is_set():
                 step_start = time.time()
 
                 # mj_step can be replaced with code that also evaluates
@@ -250,7 +275,10 @@ class MujocoRobotServer:
                     time.sleep(time_until_next_step)
 
     def stop(self) -> None:
-        self._zmq_server_thread.join()
+        self._stop_event.set()
+        if self._zmq_server_thread.is_alive():
+            self._zmq_server.stop()
+            self._zmq_server_thread.join(timeout=2)
 
     def __del__(self) -> None:
         self.stop()
