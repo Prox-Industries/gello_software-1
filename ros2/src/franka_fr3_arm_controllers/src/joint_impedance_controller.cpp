@@ -28,9 +28,10 @@ controller_interface::InterfaceConfiguration
 JointImpedanceController::command_interface_configuration() const {
   controller_interface::InterfaceConfiguration config;
   config.type = controller_interface::interface_configuration_type::INDIVIDUAL;
+  const auto joint_base_name = getJointBaseName_();
 
   for (int i = 1; i <= num_joints; ++i) {
-    config.names.push_back(namespace_prefix_ + arm_id_ + "_joint" + std::to_string(i) + "/effort");
+    config.names.push_back(joint_base_name + std::to_string(i) + "/effort");
   }
   return config;
 }
@@ -39,11 +40,10 @@ controller_interface::InterfaceConfiguration
 JointImpedanceController::state_interface_configuration() const {
   controller_interface::InterfaceConfiguration config;
   config.type = controller_interface::interface_configuration_type::INDIVIDUAL;
+  const auto joint_base_name = getJointBaseName_();
   for (int i = 1; i <= num_joints; ++i) {
-    config.names.push_back(namespace_prefix_ + arm_id_ + "_joint" + std::to_string(i) +
-                           "/position");
-    config.names.push_back(namespace_prefix_ + arm_id_ + "_joint" + std::to_string(i) +
-                           "/velocity");
+    config.names.push_back(joint_base_name + std::to_string(i) + "/position");
+    config.names.push_back(joint_base_name + std::to_string(i) + "/velocity");
   }
   return config;
 }
@@ -122,6 +122,8 @@ void JointImpedanceController::jointStateCallback_(const sensor_msgs::msg::Joint
 CallbackReturn JointImpedanceController::on_init() {
   try {
     auto_declare<std::string>("arm_id", "");
+    auto_declare<std::string>("joint_prefix", "");
+    auto_declare<std::string>("input_joint_states_topic", "gello/joint_states");
     auto_declare<std::vector<double>>("k_gains", {});
     auto_declare<std::vector<double>>("d_gains", {});
   } catch (const std::exception& e) {
@@ -134,6 +136,8 @@ CallbackReturn JointImpedanceController::on_init() {
 CallbackReturn JointImpedanceController::on_configure(
     const rclcpp_lifecycle::State& /*previous_state*/) {
   arm_id_ = get_node()->get_parameter("arm_id").as_string();
+  joint_prefix_ = get_node()->get_parameter("joint_prefix").as_string();
+  input_joint_states_topic_ = get_node()->get_parameter("input_joint_states_topic").as_string();
   namespace_prefix_ = get_node()->get_namespace();
   if (namespace_prefix_ == "/" || namespace_prefix_.empty()) {
     namespace_prefix_.clear();
@@ -177,7 +181,7 @@ CallbackReturn JointImpedanceController::on_configure(
   }
 
   joint_state_subscriber_ = get_node()->create_subscription<sensor_msgs::msg::JointState>(
-      "gello/joint_states", 1,
+      input_joint_states_topic_, 1,
       [this](const sensor_msgs::msg::JointState& msg) { jointStateCallback_(msg); });
 
   return CallbackReturn::SUCCESS;
@@ -263,6 +267,13 @@ bool JointImpedanceController::initializeMotionGenerator_() {
   const double motion_generator_speed_factor = 0.2;
   motion_generator_ = std::make_unique<MotionGenerator>(motion_generator_speed_factor, q_, q_goal);
   return true;
+}
+
+std::string JointImpedanceController::getJointBaseName_() const {
+  if (!joint_prefix_.empty()) {
+    return joint_prefix_;
+  }
+  return namespace_prefix_ + arm_id_ + "_joint";
 }
 
 }  // namespace franka_fr3_arm_controllers

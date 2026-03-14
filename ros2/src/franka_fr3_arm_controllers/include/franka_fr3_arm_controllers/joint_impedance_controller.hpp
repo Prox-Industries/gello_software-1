@@ -44,6 +44,8 @@ class JointImpedanceController : public controller_interface::ControllerInterfac
  private:
   std::string arm_id_;
   std::string namespace_prefix_;
+  std::string joint_prefix_;
+  std::string input_joint_states_topic_;
   std::string robot_description_;
   const int num_joints = 7;
   Vector7d q_;
@@ -67,6 +69,7 @@ class JointImpedanceController : public controller_interface::ControllerInterfac
   void updateJointStates_();
   void validateGelloPositions_(const sensor_msgs::msg::JointState& msg);
   void jointStateCallback_(const sensor_msgs::msg::JointState msg);
+  std::string getJointBaseName_() const;
 };
 
 }  // namespace franka_fr3_arm_controllers

@@ -15,6 +15,7 @@
   <depend>rclcpp_lifecycle</depend>
   <depend>hardware_interface</depend>
   <depend>franka_msgs</depend>
+  <depend>franka_semantic_components</depend>
   <depend>moveit_core</depend>
   <depend>moveit_msgs</depend>
 
