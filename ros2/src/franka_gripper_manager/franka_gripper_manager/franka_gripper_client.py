@@ -28,6 +28,8 @@ class GripperClient(Node):
         )
         self.declare_parameter("skip_homing_if_unavailable", True)
         self.declare_parameter("default_max_width", 0.08)
+        self.declare_parameter("action_server_timeout", 3.0)
+        self.declare_parameter("joint_state_timeout", 2.0)
 
         move_action_topic = (
             self.get_parameter("move_action_topic").get_parameter_value().string_value
@@ -52,8 +54,15 @@ class GripperClient(Node):
         default_max_width = (
             self.get_parameter("default_max_width").get_parameter_value().double_value
         )
+        action_server_timeout = (
+            self.get_parameter("action_server_timeout").get_parameter_value().double_value
+        )
+        joint_state_timeout = (
+            self.get_parameter("joint_state_timeout").get_parameter_value().double_value
+        )
 
-        self._ACTION_SERVER_TIMEOUT = 10.0
+        self._ACTION_SERVER_TIMEOUT = action_server_timeout
+        self._JOINT_STATE_TIMEOUT = joint_state_timeout
         self._MIN_GRIPPER_WIDTH_PERCENT = 0.0
         self._MAX_GRIPPER_WIDTH_PERCENT = 1.0
         self._gripper_command_transmitted = True
@@ -138,7 +147,7 @@ class GripperClient(Node):
         )
 
         self.get_logger().info(f"Waiting for {joint_states_topic}...")
-        rclpy.spin_until_future_complete(self, future, timeout_sec=self._ACTION_SERVER_TIMEOUT)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=self._JOINT_STATE_TIMEOUT)
 
         if not future.done():
             self.get_logger().warning(
