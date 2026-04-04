@@ -3,6 +3,7 @@ import time
 from rclpy.node import Node
 from franka_msgs.action import Move
 from franka_msgs.action import Homing
+from control_msgs.action import GripperCommand
 from sensor_msgs.msg import JointState
 from rclpy.action import ActionClient
 from std_msgs.msg import Float32
@@ -11,6 +12,7 @@ DEFAULT_MOVE_ACTION_TOPIC = "franka_gripper/move"
 DEFAULT_HOMING_ACTION_TOPIC = "franka_gripper/homing"
 DEFAULT_JOINT_STATES_TOPIC = "franka_gripper/joint_states"
 DEFAULT_GRIPPER_COMMAND_TOPIC = "gripper/gripper_client/target_gripper_width_percent"
+DEFAULT_GRIPPER_COMMAND_FALLBACK_ACTION_TOPIC = "/panda_hand_controller/gripper_cmd"
 
 
 class GripperClient(Node):
@@ -21,6 +23,11 @@ class GripperClient(Node):
         self.declare_parameter("homing_action_topic", DEFAULT_HOMING_ACTION_TOPIC)
         self.declare_parameter("gripper_command_topic", DEFAULT_GRIPPER_COMMAND_TOPIC)
         self.declare_parameter("joint_states_topic", DEFAULT_JOINT_STATES_TOPIC)
+        self.declare_parameter(
+            "gripper_command_fallback_action_topic", DEFAULT_GRIPPER_COMMAND_FALLBACK_ACTION_TOPIC
+        )
+        self.declare_parameter("skip_homing_if_unavailable", True)
+        self.declare_parameter("default_max_width", 0.08)
 
         move_action_topic = (
             self.get_parameter("move_action_topic").get_parameter_value().string_value
@@ -34,17 +41,29 @@ class GripperClient(Node):
         joint_states_topic = (
             self.get_parameter("joint_states_topic").get_parameter_value().string_value
         )
+        fallback_action_topic = (
+            self.get_parameter("gripper_command_fallback_action_topic")
+            .get_parameter_value()
+            .string_value
+        )
+        skip_homing_if_unavailable = (
+            self.get_parameter("skip_homing_if_unavailable").get_parameter_value().bool_value
+        )
+        default_max_width = (
+            self.get_parameter("default_max_width").get_parameter_value().double_value
+        )
 
         self._ACTION_SERVER_TIMEOUT = 10.0
         self._MIN_GRIPPER_WIDTH_PERCENT = 0.0
         self._MAX_GRIPPER_WIDTH_PERCENT = 1.0
         self._gripper_command_transmitted = True
-        self._max_width = 0.0
+        self._max_width = default_max_width
         self._last_gripper_command = self._max_width * self._MAX_GRIPPER_WIDTH_PERCENT
+        self._use_gripper_command_action = False
 
         self.get_logger().info("Initializing gripper client...")
-        self._home_gripper(homing_action_topic)
-        self._get_max_gripper_width(joint_states_topic)
+        self._home_gripper(homing_action_topic, skip_homing_if_unavailable)
+        self._get_max_gripper_width(joint_states_topic, default_max_width)
 
         self.get_logger().info("Subscribing to gripper commands...")
         self._gripper_command_subscription = self.create_subscription(
@@ -54,18 +73,32 @@ class GripperClient(Node):
 
         self.get_logger().info("Waiting for gripper move action server...")
         if not self._action_client.wait_for_server(timeout_sec=self._ACTION_SERVER_TIMEOUT):
-            raise RuntimeError(
-                f"Move action server not available after {self._ACTION_SERVER_TIMEOUT} seconds!"
+            self.get_logger().warning(
+                f"Move action server {move_action_topic} not available after "
+                f"{self._ACTION_SERVER_TIMEOUT} seconds! Falling back to {fallback_action_topic}."
             )
+            self._action_client = ActionClient(self, GripperCommand, fallback_action_topic)
+            if not self._action_client.wait_for_server(timeout_sec=self._ACTION_SERVER_TIMEOUT):
+                raise RuntimeError(
+                    f"Neither move action server {move_action_topic} nor fallback action server "
+                    f"{fallback_action_topic} is available after {self._ACTION_SERVER_TIMEOUT} seconds!"
+                )
+            self._use_gripper_command_action = True
 
         self.get_logger().info("Gripper client initialized!")
 
-    def _home_gripper(self, homing_action_topic: str) -> None:
+    def _home_gripper(self, homing_action_topic: str, skip_if_unavailable: bool) -> None:
         self.get_logger().info("Starting gripper homing...")
         homing_client = ActionClient(self, Homing, homing_action_topic)
 
         self.get_logger().info(f"Waiting for homing action server {homing_action_topic}...")
         if not homing_client.wait_for_server(timeout_sec=self._ACTION_SERVER_TIMEOUT):
+            if skip_if_unavailable:
+                self.get_logger().warning(
+                    f"Homing action server {homing_action_topic} not available after "
+                    f"{self._ACTION_SERVER_TIMEOUT} seconds; continuing without homing."
+                )
+                return
             raise RuntimeError(
                 f"Homing action server not available after {self._ACTION_SERVER_TIMEOUT} seconds!"
             )
@@ -89,7 +122,7 @@ class GripperClient(Node):
         else:
             raise RuntimeError("Gripper homing failed!")
 
-    def _get_max_gripper_width(self, joint_states_topic: str) -> None:
+    def _get_max_gripper_width(self, joint_states_topic: str, default_max_width: float) -> None:
         self.get_logger().info("Readout maximum gripper width...")
         future = rclpy.task.Future()
 
@@ -105,7 +138,16 @@ class GripperClient(Node):
         )
 
         self.get_logger().info(f"Waiting for {joint_states_topic}...")
-        rclpy.spin_until_future_complete(self, future)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=self._ACTION_SERVER_TIMEOUT)
+
+        if not future.done():
+            self.get_logger().warning(
+                f"No gripper joint state received on {joint_states_topic}; "
+                f"using default max width {default_max_width} m."
+            )
+            self._max_width = default_max_width
+            self.destroy_subscription(gripper_subscription)
+            return
 
         self.get_logger().info(f"Unsubscribing from {joint_states_topic}")
         self.destroy_subscription(gripper_subscription)
@@ -119,9 +161,14 @@ class GripperClient(Node):
             self._gripper_command_transmitted = False
 
     def _send_gripper_command(self, gripper_position: float) -> None:
-        goal_msg = Move.Goal()
-        goal_msg.width = gripper_position
-        goal_msg.speed = 1.0
+        if self._use_gripper_command_action:
+            goal_msg = GripperCommand.Goal()
+            goal_msg.command.position = gripper_position
+            goal_msg.command.max_effort = 40.0
+        else:
+            goal_msg = Move.Goal()
+            goal_msg.width = gripper_position
+            goal_msg.speed = 1.0
         self._future = self._action_client.send_goal_async(goal_msg)
         self._future.add_done_callback(self._gripper_response_callback)
 
