@@ -124,6 +124,7 @@ CallbackReturn JointImpedanceController::on_init() {
     auto_declare<std::string>("arm_id", "");
     auto_declare<std::string>("joint_prefix", "");
     auto_declare<std::string>("input_joint_states_topic", "gello/joint_states");
+    auto_declare<double>("k_alpha", 0.99);
     auto_declare<std::vector<double>>("k_gains", {});
     auto_declare<std::vector<double>>("d_gains", {});
   } catch (const std::exception& e) {
