@@ -28,6 +28,10 @@ class GelloPublisher(Node):
             raise
 
         self.arm_joint_publisher = self.create_publisher(JointState, "gello/joint_states", 10)
+        self.arm_joint_raw_publisher = self.create_publisher(JointState, "gello/joint_states_raw", 10)
+        self.arm_joint_unclipped_publisher = self.create_publisher(
+            JointState, "gello/joint_states_unclipped", 10
+        )
         self.gripper_joint_publisher = self.create_publisher(
             Float32, "gripper/gripper_client/target_gripper_width_percent", 10
         )
@@ -64,6 +68,9 @@ class GelloPublisher(Node):
             "fr3_joint7",
         ]
         [gello_arm_joints, gripper_position] = self.gello_hardware.get_joint_and_gripper_positions()
+        [gello_arm_joints_raw, gello_arm_joints_unclipped, _] = (
+            self.gello_hardware.get_arm_joint_diagnostics()
+        )
 
         arm_joint_states = JointState()
         arm_joint_states.header.stamp = self.get_clock().now().to_msg()
@@ -71,8 +78,20 @@ class GelloPublisher(Node):
         arm_joint_states.header.frame_id = "fr3_link0"
         arm_joint_states.position = gello_arm_joints.tolist()
 
+        arm_joint_states_raw = JointState()
+        arm_joint_states_raw.header = arm_joint_states.header
+        arm_joint_states_raw.name = JOINT_NAMES
+        arm_joint_states_raw.position = gello_arm_joints_raw.tolist()
+
+        arm_joint_states_unclipped = JointState()
+        arm_joint_states_unclipped.header = arm_joint_states.header
+        arm_joint_states_unclipped.name = JOINT_NAMES
+        arm_joint_states_unclipped.position = gello_arm_joints_unclipped.tolist()
+
         gripper_joint_states = Float32()
         gripper_joint_states.data = gripper_position
+        self.arm_joint_raw_publisher.publish(arm_joint_states_raw)
+        self.arm_joint_unclipped_publisher.publish(arm_joint_states_unclipped)
         self.arm_joint_publisher.publish(arm_joint_states)
         self.gripper_joint_publisher.publish(gripper_joint_states)
 

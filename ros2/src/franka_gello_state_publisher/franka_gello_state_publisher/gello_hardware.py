@@ -158,11 +158,18 @@ class GelloHardware:
             self._assembly_offsets,
             self._joint_signs,
         )
+        initial_arm_joints_clipped = np.clip(
+            initial_arm_joints, self.JOINT_POSITION_LIMITS[:, 0], self.JOINT_POSITION_LIMITS[:, 1]
+        )
 
         # Store raw initial joint positions to compute joint position deltas on update
         self._prev_arm_joints_raw = self._initial_arm_joints_raw.copy()
         # Store processed initial joint positions for updating the processed position with the deltas
         self._prev_arm_joints = initial_arm_joints.copy()
+        # Expose the latest diagnostic values so callers can inspect raw vs unclipped vs clipped motion.
+        self._last_arm_joints_raw = self._initial_arm_joints_raw.copy()
+        self._last_arm_joints_unclipped = initial_arm_joints.copy()
+        self._last_arm_joints_clipped = initial_arm_joints_clipped.copy()
 
         self._dynamixel_control_config = DynamixelControlConfig(
             kp_p=hardware_config["dynamixel_kp_p"].copy(),
@@ -244,7 +251,18 @@ class GelloHardware:
         arm_joints_clipped = np.clip(
             arm_joints, self.JOINT_POSITION_LIMITS[:, 0], self.JOINT_POSITION_LIMITS[:, 1]
         )
+        self._last_arm_joints_raw = arm_joints_raw.copy()
+        self._last_arm_joints_unclipped = arm_joints.copy()
+        self._last_arm_joints_clipped = arm_joints_clipped.copy()
         return arm_joints_clipped
+
+    def get_arm_joint_diagnostics(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return the latest raw, unclipped, and clipped arm joint positions."""
+        return (
+            self._last_arm_joints_raw.copy(),
+            self._last_arm_joints_unclipped.copy(),
+            self._last_arm_joints_clipped.copy(),
+        )
 
     def process_gripper_position(self, gripper_position_raw: float) -> float:
         """Convert and clamp raw gripper position to percentage (0-1). Return 0.0 if no gripper is present."""
