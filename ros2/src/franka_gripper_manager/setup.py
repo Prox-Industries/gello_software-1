@@ -25,6 +25,10 @@ setup(
     entry_points={
         "console_scripts": [
             "franka_gripper_client = franka_gripper_manager.franka_gripper_client:main",
+            (
+                "franka_gripper_teleop_controller = "
+                "franka_gripper_manager.franka_gripper_teleop_controller:main"
+            ),
             "robotiq_gripper_client = franka_gripper_manager.robotiq_gripper_client:main",
         ],
     },
